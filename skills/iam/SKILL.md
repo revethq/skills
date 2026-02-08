@@ -10,7 +10,7 @@ Identity and access management for Kotlin/Quarkus applications. Provides permiss
 ## Dependency Coordinates
 
 **Group ID:** `com.revethq.iam`
-**Version:** `0.1.13`
+**Version:** `0.1.14`
 
 ### Modules
 
@@ -27,9 +27,9 @@ Identity and access management for Kotlin/Quarkus applications. Provides permiss
 ### Gradle
 
 ```kotlin
-implementation("com.revethq.iam:revet-permission:0.1.13")
-implementation("com.revethq.iam:revet-user:0.1.13")
-implementation("com.revethq.iam:revet-scim:0.1.13")
+implementation("com.revethq.iam:revet-permission:0.1.14")
+implementation("com.revethq.iam:revet-user:0.1.14")
+implementation("com.revethq.iam:revet-scim:0.1.14")
 ```
 
 ### Maven
@@ -38,7 +38,7 @@ implementation("com.revethq.iam:revet-scim:0.1.13")
 <dependency>
     <groupId>com.revethq.iam</groupId>
     <artifactId>revet-permission</artifactId>
-    <version>0.1.13</version>
+    <version>0.1.14</version>
 </dependency>
 ```
 
