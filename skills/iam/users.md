@@ -76,7 +76,8 @@ data class Profile(
 
 enum class ProfileType {
     User,
-    Application
+    Application,
+    ServiceAccount
 }
 ```
 

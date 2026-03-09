@@ -18,6 +18,12 @@ npx skills add github:revethq/revet-skills --skill auth
 
 # Install Quarkus skill
 npx skills add github:revethq/revet-skills --skill quarkus
+
+# Install Buckets skill
+npx skills add github:revethq/revet-skills --skill buckets
+
+# Install Notifications skill
+npx skills add github:revethq/revet-skills --skill notifications
 ```
 
 Pin to a specific version:
@@ -33,6 +39,8 @@ npx skills add github:revethq/revet-skills@iam-0.1.13 --skill iam
 | `iam` | revet-iam | Identity and access management: permissions, users, groups, SCIM |
 | `core` | revet-core | Shared domain models: Metadata, Identifier, SchemaValidation |
 | `auth` | revet-auth | OAuth 2.1 / OIDC authorization server (in development) |
+| `buckets` | revet-buckets | Cloud storage bucket management: multi-provider presigned URLs, credential encryption |
+| `notifications` | revet-notifications | Event notification system: publish, subscribe, multi-channel delivery, cursor-based streaming |
 | `quarkus` | - | Project structure and configuration for Quarkus/Kotlin multi-module projects |
 
 ## Discovery
@@ -59,6 +67,14 @@ revet-skills/
 │   │   └── scim.md           # SCIM integration
 │   ├── core/
 │   │   └── SKILL.md          # Shared domain models
+│   ├── buckets/
+│   │   ├── SKILL.md          # Entry point
+│   │   ├── permissions.md    # URN/Actions/IAM policies
+│   │   └── storage.md        # Service interfaces, provider SPI
+│   ├── notifications/
+│   │   ├── SKILL.md          # Entry point
+│   │   ├── delivery.md       # Channel SPI, retry scheduler
+│   │   └── streaming.md      # Cursor-based streaming, date-range queries
 │   ├── auth/
 │   │   └── SKILL.md          # OAuth 2.1/OIDC (preview)
 │   └── quarkus/

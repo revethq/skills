@@ -147,7 +147,7 @@ data class PolicyAttachment(
 )
 ```
 
-Attaches a policy to a principal (User or Group URN).
+Attaches a policy to a principal (User, Group, or ServiceAccount URN).
 
 ## Authorization Request/Result
 
@@ -299,7 +299,7 @@ interface PolicyService {
 ## PolicyAttachmentService Interface
 
 ```kotlin
-package com.revethq.iam.permission.persistence.service
+package com.revethq.iam.permission.service
 
 interface PolicyAttachmentService {
     fun attach(policyId: UUID, principalUrn: String, attachedBy: String? = null): PolicyAttachment
@@ -318,6 +318,8 @@ data class AttachedPolicy(
     val attachedBy: String?
 )
 ```
+
+> **Note:** `PolicyAttachmentService` and `AttachedPolicy` live in the `revet-permission` domain module (`com.revethq.iam.permission.service` package), not in `permission-persistence-runtime`. The implementation (`PolicyAttachmentServiceImpl`) is in `permission-persistence-runtime`.
 
 ## JAX-RS Authorization Filter
 
@@ -350,6 +352,115 @@ Use `@RequiresPermission` annotation on JAX-RS endpoints:
 fun getDocument(@PathParam("id") id: UUID): Response
 ```
 
+## Permission Discovery
+
+Package: `com.revethq.iam.permission.discovery`
+
+### PermissionDeclaration
+
+```kotlin
+data class PermissionDeclaration(
+    val action: String,
+    val description: String? = null,
+    val resourceType: String? = null
+)
+```
+
+- `action`: follows `{service}:{action}` format (e.g., `iam:CreateUser`)
+- `description`: human-readable description of the permission
+- `resourceType`: URN template pattern (e.g., `urn:revet:iam:{tenantId}:user/{userId}`)
+
+### PermissionManifest
+
+```kotlin
+data class PermissionManifest(
+    val service: String,
+    val permissions: List<PermissionDeclaration>
+)
+```
+
+Groups permission declarations by service name.
+
+### PermissionProvider
+
+```kotlin
+package com.revethq.iam.permission.discovery
+
+interface PermissionProvider {
+    fun manifest(): PermissionManifest
+}
+```
+
+Implement this interface as an `@ApplicationScoped` CDI bean to declare permissions for your module or service. CDI + Jandex auto-discovers all implementations from the classpath, including transitive dependencies.
+
+```kotlin
+@ApplicationScoped
+class MyServicePermissionProvider : PermissionProvider {
+    override fun manifest() = PermissionManifest(
+        service = "my-service",
+        permissions = listOf(
+            PermissionDeclaration("my-service:CreateWidget", "Create a widget", "urn:revet:my-service:{tenantId}:widget/{widgetId}"),
+            PermissionDeclaration("my-service:GetWidget", "Get a widget by ID", "urn:revet:my-service:{tenantId}:widget/{widgetId}"),
+        )
+    )
+}
+```
+
+### PermissionRegistry
+
+```kotlin
+package com.revethq.iam.permission.discovery
+
+@ApplicationScoped
+class PermissionRegistry(
+    providers: Instance<PermissionProvider>
+) {
+    fun allManifests(): List<PermissionManifest>
+    fun allPermissions(): List<PermissionDeclaration>
+}
+```
+
+Aggregates all `PermissionProvider` beans discovered by CDI. Inject this to programmatically access all declared permissions.
+
+### Well-Known Endpoint
+
+```
+GET /.well-known/revet-permissions
+```
+
+Returns all aggregated permissions from all `PermissionProvider` beans on the classpath. No authentication required.
+
+**Response:**
+
+```json
+{
+  "manifests": [
+    {
+      "service": "iam",
+      "permissions": [
+        {
+          "action": "iam:CreateUser",
+          "description": "Create a new user",
+          "resourceType": "urn:revet:iam:{tenantId}:user/{userId}"
+        }
+      ]
+    },
+    {
+      "service": "billing",
+      "permissions": [
+        {
+          "action": "billing:CreateInvoice",
+          "description": "Create an invoice",
+          "resourceType": "urn:revet:billing:{tenantId}:invoice/{invoiceId}"
+        }
+      ]
+    }
+  ]
+}
+```
+
+This endpoint combines permissions declared by the downstream application and all of its library dependencies. Each library that ships a `PermissionProvider` CDI bean (with a Jandex index) is automatically included.
+
 ## REST API Endpoints
 
 ### PolicyResource
@@ -363,4 +474,10 @@ DELETE /policies/{id}                     Delete policy
 POST   /policies/{id}/attachments         Attach to principal
 DELETE /policies/{id}/attachments/{attachmentId}  Detach
 GET    /policies/{id}/attachments         List attachments
+```
+
+### WellKnownPermissionsResource
+
+```
+GET    /.well-known/revet-permissions     Discover all declared permissions
 ```

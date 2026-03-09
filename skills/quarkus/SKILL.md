@@ -1,11 +1,11 @@
 ---
 name: revet-quarkus
-description: Project structure and configuration guide for Revet Quarkus/Kotlin multi-module projects
+description: Project structure, native image builds, and supply chain security guide for Revet Quarkus/Kotlin multi-module projects
 ---
 
 # Revet Quarkus Project Guide
 
-Standards and patterns for Revet Quarkus/Kotlin multi-module projects. Use this skill to create new projects, add modules, and audit existing projects for conformance.
+Standards and patterns for Revet Quarkus/Kotlin multi-module projects. Use this skill to create new projects, add modules, configure native image builds, and audit existing projects for conformance.
 
 ## Tech Stack Versions
 
@@ -14,6 +14,7 @@ Standards and patterns for Revet Quarkus/Kotlin multi-module projects. Use this 
 | Quarkus | 3.31.1 | LTS release |
 | Kotlin | 2.3.10 | K2 compiler |
 | JVM | 25 | Target runtime |
+| GraalVM CE | 25.0.2 | Native image compiler |
 | Gradle | 9.3.1 | Build tool |
 | ktlint | 1.5.0 | Code formatting via ktlint-gradle plugin |
 
@@ -25,6 +26,10 @@ Standards and patterns for Revet Quarkus/Kotlin multi-module projects. Use this 
 quarkus = "3.31.1"
 kotlin = "2.3.10"
 ktlint = "1.5.0"
+graalvm = "25.0.2"
+
+[libraries]
+graalvm-svm = { module = "org.graalvm.nativeimage:svm", version.ref = "graalvm" }
 
 [plugins]
 quarkus = { id = "io.quarkus", version.ref = "quarkus" }
@@ -155,6 +160,137 @@ noArg {
 }
 ```
 
+## GraalVM Native Image Builds
+
+All Revet application modules (auth, documents, platform) target GraalVM native-image compilation. The builder image is built with Chainguard melange/apko from `revet-graal-builder/`.
+
+### Gradle Configuration for Native Builds
+
+Application web modules need native-image support in `gradle.properties`:
+
+```properties
+# gradle.properties
+quarkus.native.enabled=false
+quarkus.native.additional-build-args=--enable-sbom=cyclonedx
+```
+
+The `--enable-sbom=cyclonedx` flag tells GraalVM to embed a CycloneDX SBOM into the native binary at compile time. This SBOM reflects only the classes/JARs that survived dead code elimination — the most accurate representation of what's actually in the binary.
+
+### GraalVM Native Image Substitutions
+
+When a module needs GraalVM substitutions, add the SVM dependency as `compileOnly`:
+
+```kotlin
+// build.gradle.kts (application web module)
+dependencies {
+    compileOnly("org.graalvm.nativeimage:svm:25.0.2")
+}
+```
+
+### Building Native Executables
+
+```bash
+# Using the revet graal-builder image
+docker run --rm -v $(pwd):/build -w /build revet/graal-builder:25.0.2 \
+  ./gradlew :web:build -Dquarkus.native.enabled=true \
+  -Dquarkus.native.container-build=false --no-daemon
+
+# Or locally with GraalVM installed
+./gradlew :web:build -Dquarkus.native.enabled=true
+```
+
+### Extracting the Embedded SBOM
+
+After a native build, extract the SBOM from the binary:
+
+```bash
+native-image-inspect --sbom web/build/*-runner > sbom-native.cdx.json
+```
+
+This produces a CycloneDX JSON document listing all Java dependencies compiled into the binary.
+
+## SBOMs and Supply Chain Attestation
+
+Revet uses a dual-SBOM strategy for container images. The two SBOMs cover different layers and use different formats.
+
+### SBOM Sources
+
+| Source | Format | Covers | Tool |
+|--------|--------|--------|------|
+| GraalVM native-image | CycloneDX | Java/Kotlin dependencies in the binary | `--enable-sbom=cyclonedx` |
+| apko image build | SPDX | OS-level wolfi APK packages | apko (built-in) |
+
+### Format Mismatch: CycloneDX vs SPDX
+
+GraalVM only outputs CycloneDX. Chainguard apko only outputs SPDX. These are **not merged** — they are attached as separate attestations on the container image. This is the recommended approach because:
+
+- Cross-format conversion loses fidelity (fields don't map 1:1)
+- Vulnerability scanners (Grype, Trivy) ingest both formats independently
+- Each SBOM retains full accuracy for its layer
+- cosign supports multiple attestations with different predicate types on the same image
+
+### Attestation Pipeline
+
+For application modules producing container images:
+
+```bash
+# 1. Build native binary (SBOM embedded automatically via --enable-sbom=cyclonedx)
+docker run --rm -v $(pwd):/build -w /build revet/graal-builder:25.0.2 \
+  ./gradlew :web:build -Dquarkus.native.enabled=true --no-daemon
+
+# 2. Extract Java SBOM from native binary
+native-image-inspect --sbom web/build/*-runner > sbom-java.cdx.json
+
+# 3. Build runtime image with apko (produces sbom-x86_64.spdx.json alongside)
+apko build apko-runtime.yaml $REGISTRY/$PROJECT:$VERSION runtime.tar
+
+# 4. Push image
+crane push runtime.tar $REGISTRY/$PROJECT:$VERSION
+
+# 5. Attest Java dependencies (CycloneDX)
+cosign attest \
+  --predicate sbom-java.cdx.json \
+  --type cyclonedx \
+  $REGISTRY/$PROJECT:$VERSION
+
+# 6. Attest OS packages (SPDX)
+cosign attest \
+  --predicate sbom-x86_64.spdx.json \
+  --type spdxjson \
+  $REGISTRY/$PROJECT:$VERSION
+
+# 7. Sign the image itself
+cosign sign $REGISTRY/$PROJECT:$VERSION
+```
+
+### Verification
+
+```bash
+# Verify image signature
+cosign verify $REGISTRY/$PROJECT:$VERSION
+
+# Verify and extract Java SBOM attestation
+cosign verify-attestation --type cyclonedx $REGISTRY/$PROJECT:$VERSION
+
+# Verify and extract OS SBOM attestation
+cosign verify-attestation --type spdxjson $REGISTRY/$PROJECT:$VERSION
+```
+
+### Library Modules (Maven Central)
+
+Library modules (core, iam, buckets) don't produce container images. Their SBOMs are generated via Gradle and optionally signed as blobs:
+
+```bash
+# Generate full dependency tree SBOM (optional, for supply chain transparency)
+./gradlew cyclonedxBom
+# Produces build/reports/bom.json
+
+# Sign the SBOM alongside the JARs
+cosign sign-blob --bundle build/reports/bom.json.sigstore build/reports/bom.json
+```
+
+JARs themselves are GPG-signed by JReleaser for Maven Central. The cosign blob signature is supplementary for sigstore-aware consumers.
+
 ## Known Workarounds
 
 ### Quarkus Bug #36506 - Dev Mode Classloading
@@ -235,6 +371,11 @@ Use this checklist when auditing existing projects:
 - [ ] Configures `allOpen` for JPA annotations
 - [ ] Configures `noArg` for JPA annotations
 - [ ] Depends on core module (not web module)
+
+### Native Image (Application Modules)
+- [ ] `gradle.properties` includes `quarkus.native.additional-build-args=--enable-sbom=cyclonedx`
+- [ ] GraalVM SVM dependency is `compileOnly` (not `implementation`)
+- [ ] Native build produces extractable SBOM (`native-image-inspect --sbom`)
 
 ### Code Quality
 - [ ] ktlint plugin applied to all modules

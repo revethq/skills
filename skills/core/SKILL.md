@@ -1,41 +1,43 @@
 ---
 name: revet-core
-description: Shared domain models for Revet libraries - Metadata, Identifier, SchemaValidation
+description: Shared domain models for Revet libraries - Metadata, Identifier, SchemaValidation, Organization, Project
 ---
 
 # Revet Core Library
 
-Lightweight shared domain models used across Revet libraries. Zero external dependencies beyond Kotlin stdlib and Java 8+ APIs.
+Shared domain models and supporting layers used across Revet libraries. Multi-module project providing core domain models, persistence (Panache), and web (DTOs/mappers).
+
+## Modules
+
+| Module | Artifact ID | Purpose |
+|--------|-------------|---------|
+| `core` | `revet-core-core` | Domain models, no framework dependencies |
+| `persistence-runtime` | `revet-core-persistence-runtime` | Panache entities, repositories, entity-domain mappers |
+| `web` | `revet-core-web` | DTOs, DTO-domain mappers |
 
 ## Dependency Coordinates
 
 **Group ID:** `com.revethq`
-**Artifact ID:** `revet-core`
-**Version:** `0.1.0`
+**Version:** `0.2.0`
 
 ### Gradle
 
 ```kotlin
-implementation("com.revethq:revet-core:0.1.0")
+// Core domain models (no Quarkus dependency)
+implementation("com.revethq:revet-core-core:0.2.0")
+
+// Persistence layer (Panache entities + repositories)
+implementation("com.revethq:revet-core-persistence-runtime:0.2.0")
+
+// Web layer (DTOs + mappers)
+implementation("com.revethq:revet-core-web:0.2.0")
 ```
 
-### Maven
-
-```xml
-<dependency>
-    <groupId>com.revethq</groupId>
-    <artifactId>revet-core</artifactId>
-    <version>0.1.0</version>
-</dependency>
-```
-
-## Domain Models
+## Domain Models (core module)
 
 ### Identifier
 
 ```kotlin
-package com.revethq.core
-
 data class Identifier(
     val system: String? = null,
     val value: String? = null
@@ -44,22 +46,9 @@ data class Identifier(
 
 Represents an external identifier with a system namespace and value.
 
-**Usage:**
-```kotlin
-val identifier = Identifier(
-    system = "urn:oid:2.16.840.1.113883.4.1",
-    value = "123-45-6789"
-)
-```
-
 ### SchemaValidation
 
 ```kotlin
-package com.revethq.core
-
-import java.time.OffsetDateTime
-import java.util.UUID
-
 data class SchemaValidation(
     val schemaId: UUID? = null,
     val isValid: Boolean = false,
@@ -69,20 +58,9 @@ data class SchemaValidation(
 
 Records schema validation state for a resource.
 
-**Usage:**
-```kotlin
-val validation = SchemaValidation(
-    schemaId = UUID.fromString("..."),
-    isValid = true,
-    validatedOn = OffsetDateTime.now()
-)
-```
-
 ### Metadata
 
 ```kotlin
-package com.revethq.core
-
 data class Metadata(
     val identifiers: List<Identifier> = emptyList(),
     val schemaValidations: List<SchemaValidation> = emptyList(),
@@ -90,57 +68,141 @@ data class Metadata(
 )
 ```
 
-Aggregate metadata container combining:
-- Multiple external identifiers
-- Schema validation history
-- Extensible key-value properties
+Aggregate metadata container combining identifiers, schema validation history, and extensible key-value properties.
 
-**Usage:**
+### Organization
+
 ```kotlin
-val metadata = Metadata(
-    identifiers = listOf(
-        Identifier(system = "saml", value = "user@idp.com"),
-        Identifier(system = "scim", value = "external-id-123")
-    ),
-    schemaValidations = listOf(validation),
-    properties = mapOf(
-        "customField" to "value",
-        "tier" to "premium"
+data class Organization(
+    val id: Long?,
+    val uuid: UUID,
+    val name: String,
+    val description: String?,
+    val contactInfo: ContactInfo,
+    val locale: String?,
+    val timezone: String,
+    val bucketId: Long?,
+    val isActive: Boolean,
+    val removedAt: LocalDateTime?,
+) {
+    data class ContactInfo(
+        val address: String?, val city: String?, val state: String?,
+        val zipCode: String?, val country: String?, val phone: String?,
+        val fax: String?, val website: String?,
     )
-)
+
+    companion object {
+        fun create(name: String, ...): Organization
+    }
+
+    fun update(name: String? = null, ...): Organization
+    fun deactivate(): Organization
+    fun isNew(): Boolean
+}
 ```
 
-## Extension Points
+Business entity with contact information, locale/timezone, and soft-delete lifecycle. Factory method `create()` generates a UUID and sets defaults. `update()` returns an immutable copy with changed fields. `deactivate()` sets `isActive = false` and stamps `removedAt`.
 
-### Properties Map
+### Project
 
-The `properties: Map<String, Any>` field in `Metadata` is the primary extension point:
-- Add custom attributes without modifying core classes
-- Store domain-specific metadata
-- Maintain forward compatibility
+```kotlin
+data class Project(
+    val id: Long?,
+    val uuid: UUID,
+    val name: String,
+    val description: String?,
+    val organizationId: Long,
+    val clientIds: Set<UUID>,
+    val tags: Set<String>,
+    val isActive: Boolean,
+    val timestamps: Timestamps,
+) {
+    data class Timestamps(
+        val createdAt: LocalDateTime,
+        val modifiedAt: LocalDateTime,
+        val removedAt: LocalDate?,
+    )
 
-### Multiple Identifier Systems
+    companion object {
+        fun create(name: String, organizationId: Long, ...): Project
+    }
 
-Support multiple external identifiers per resource:
-- SAML NameID
-- SCIM externalId
-- OIDC subject
-- Custom enterprise identifiers
+    fun update(name: String? = null, ...): Project
+    fun deactivate(): Project
+    fun addClient(clientId: UUID): Project
+    fun removeClient(clientId: UUID): Project
+    fun addTag(tag: String): Project
+    fun removeTag(tag: String): Project
+    fun isNew(): Boolean
+}
+```
 
-### Multi-Schema Validation
+Scoped work context belonging to an Organization. Manages client UUIDs and tags as immutable sets. All mutating methods return a new copy with `modifiedAt` advanced.
 
-Track validation against multiple schemas:
-- Validate same resource against different schema versions
-- Record validation history with timestamps
+## Persistence Layer (persistence-runtime module)
+
+### Entities
+
+- `OrganizationEntity` - Panache entity mapped to `revet_organizations` table. Contact info fields are flattened columns.
+- `ProjectEntity` - Panache entity mapped to `revet_projects` table. Uses `@ManyToOne` to OrganizationEntity and `@ElementCollection` for `clientIds` (table `project_clients`) and `tags` (table `project_tags`).
+
+### Repositories
+
+```kotlin
+interface OrganizationRepository {
+    fun findAll(includeInactive: Boolean = false): List<Organization>
+    fun findById(id: Long): Organization?
+    fun findByUuid(uuid: UUID): Organization?
+    fun save(organization: Organization): Organization
+    fun delete(id: Long): Boolean
+}
+
+interface ProjectRepository {
+    fun findAll(includeInactive: Boolean = false): List<Project>
+    fun findById(id: Long): Project?
+    fun findByUuid(uuid: UUID): Project?
+    fun findByOrganizationId(organizationId: Long, includeInactive: Boolean = false): List<Project>
+    fun save(project: Project): Project
+    fun delete(id: Long): Boolean
+}
+```
+
+Both repositories have `@ApplicationScoped` Panache implementations with `@Transactional` write operations and soft-delete support.
+
+### Mappers
+
+- `OrganizationMapper` - Converts between `OrganizationEntity` and `Organization` domain model. Handles `ContactInfo` composition.
+- `ProjectMapper` - Converts between `ProjectEntity` and `Project` domain model. Handles `Timestamps` composition.
+
+## Web Layer (web module)
+
+### DTOs
+
+**Organization:**
+- `OrganizationDTO` - Response DTO with contact info flattened to top-level fields
+- `CreateOrganizationRequest` - Creation request
+- `UpdateOrganizationRequest` - Partial update request (all fields optional)
+
+**Project:**
+- `ProjectDTO` - Response DTO with timestamps flattened to `createdAt`/`modifiedAt`
+- `CreateProjectRequest` / `UpdateProjectRequest`
+- `AddClientRequest` / `RemoveClientRequest`
+- `AddTagRequest` / `RemoveTagRequest`
+
+### Mappers
+
+- `OrganizationDTOMapper` - Maps `Organization` domain to/from DTOs. Includes `toContactInfo()` helpers for request conversion.
+- `ProjectDTOMapper` - Maps `Project` domain to `ProjectDTO`.
 
 ## Characteristics
 
-- **Zero Dependencies**: Pure Kotlin + Java stdlib
-- **Immutable by Default**: Data classes encourage immutable patterns
-- **Type-Safe**: Full Kotlin null safety
-- **Composition**: Metadata aggregates, doesn't extend
+- **Immutable by Default**: Domain models are data classes; all mutations return new copies
+- **Soft Delete**: Both Organization and Project use `isActive` + timestamp pattern
+- **Framework Independence**: Core module has zero framework dependencies
+- **Layered Architecture**: Domain ↔ Entity ↔ DTO with explicit mappers at each boundary
 
 ## Used By
 
-- `revet-iam` - User, Group, Policy, and other entities include `metadata: Metadata`
+- `revet-iam` - User, Group, Policy entities include `metadata: Metadata`
 - `revet-auth` - Application, Client, Scope entities use Metadata
+- `revet-documents` - Consumes Organization and Project models
