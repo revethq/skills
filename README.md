@@ -24,6 +24,9 @@ npx skills add github:revethq/revet-skills --skill buckets
 
 # Install Notifications skill
 npx skills add github:revethq/revet-skills --skill notifications
+
+# Install Capabilities skill
+npx skills add github:revethq/revet-skills --skill capabilities
 ```
 
 Pin to a specific version:
@@ -41,6 +44,7 @@ npx skills add github:revethq/revet-skills@iam-0.1.13 --skill iam
 | `auth` | revet-auth | OAuth 2.1 / OIDC authorization server (in development) |
 | `buckets` | revet-buckets | Cloud storage bucket management: multi-provider presigned URLs, credential encryption |
 | `notifications` | revet-notifications | Event notification system: publish, subscribe, multi-channel delivery, cursor-based streaming |
+| `capabilities` | revet-capabilities | Feature-level capability evaluation: aggregates permissions with tenant overrides |
 | `quarkus` | - | Project structure and configuration for Quarkus/Kotlin multi-module projects |
 
 ## Discovery
@@ -75,6 +79,8 @@ revet-skills/
 │   │   ├── SKILL.md          # Entry point
 │   │   ├── delivery.md       # Channel SPI, retry scheduler
 │   │   └── streaming.md      # Cursor-based streaming, date-range queries
+│   ├── capabilities/
+│   │   └── SKILL.md          # Capability evaluation, SPI, tenant overrides
 │   ├── auth/
 │   │   └── SKILL.md          # OAuth 2.1/OIDC (preview)
 │   └── quarkus/

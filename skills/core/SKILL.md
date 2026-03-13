@@ -1,6 +1,6 @@
 ---
 name: revet-core
-description: Shared domain models for Revet libraries - Metadata, Identifier, SchemaValidation, Organization, Project
+description: Shared domain models for Revet libraries - Metadata, Identifier, SchemaValidation, Organization, Project, Tag, TaggedItem, Urn
 ---
 
 # Revet Core Library
@@ -18,22 +18,45 @@ Shared domain models and supporting layers used across Revet libraries. Multi-mo
 ## Dependency Coordinates
 
 **Group ID:** `com.revethq`
-**Version:** `0.2.0`
+**Version:** `0.2.1`
 
 ### Gradle
 
 ```kotlin
 // Core domain models (no Quarkus dependency)
-implementation("com.revethq:revet-core-core:0.2.0")
+implementation("com.revethq:revet-core-core:0.2.1")
 
 // Persistence layer (Panache entities + repositories)
-implementation("com.revethq:revet-core-persistence-runtime:0.2.0")
+implementation("com.revethq:revet-core-persistence-runtime:0.2.1")
 
 // Web layer (DTOs + mappers)
-implementation("com.revethq:revet-core-web:0.2.0")
+implementation("com.revethq:revet-core-web:0.2.1")
 ```
 
 ## Domain Models (core module)
+
+### Urn
+
+```kotlin
+data class Urn(
+    val namespace: String,
+    val service: String,
+    val tenant: String,
+    val resourceType: String,
+    val resourceId: String,
+) {
+    fun matches(pattern: Urn): Boolean
+    fun matches(pattern: String): Boolean
+    override fun toString(): String  // "urn:{namespace}:{service}:{tenant}:{resourceType}/{resourceId}"
+
+    companion object {
+        fun parse(urn: String): Urn?
+        fun parseOrThrow(urn: String): Urn
+    }
+}
+```
+
+Uniform Resource Name for globally unique identification of resources. Format: `urn:{namespace}:{service}:{tenant}:{resourceType}/{resourceId}`. Supports wildcard pattern matching: `*` matches a single path segment, `**` matches zero or more segments. Wildcards work in all components.
 
 ### Identifier
 
@@ -139,12 +162,52 @@ data class Project(
 
 Scoped work context belonging to an Organization. Manages client UUIDs and tags as immutable sets. All mutating methods return a new copy with `modifiedAt` advanced.
 
+### Tag
+
+```kotlin
+data class Tag(
+    val id: Int?,
+    val name: String,
+    val slug: String,
+    val organizationId: Long,
+) {
+    companion object {
+        fun create(name: String, organizationId: Long, slug: String? = null): Tag
+    }
+
+    fun update(name: String? = null, slug: String? = null): Tag
+    fun isNew(): Boolean
+}
+```
+
+Organization-scoped tag with auto-generated slug (lowercased, non-alphanumeric replaced with hyphens). Factory method `create()` generates slug from name if not provided.
+
+### TaggedItem
+
+```kotlin
+data class TaggedItem(
+    val id: Long?,
+    val tagId: Int,
+    val resourceUrn: String,
+) {
+    companion object {
+        fun create(tagId: Int, resourceUrn: String): TaggedItem
+    }
+
+    fun isNew(): Boolean
+}
+```
+
+Generic association between a Tag and any entity identified by a URN. Enables polymorphic tagging — any resource with a URN can be tagged without schema changes.
+
 ## Persistence Layer (persistence-runtime module)
 
 ### Entities
 
 - `OrganizationEntity` - Panache entity mapped to `revet_organizations` table. Contact info fields are flattened columns.
 - `ProjectEntity` - Panache entity mapped to `revet_projects` table. Uses `@ManyToOne` to OrganizationEntity and `@ElementCollection` for `clientIds` (table `project_clients`) and `tags` (table `project_tags`).
+- `TagEntity` - Panache entity mapped to `revet_tags` table. Fields: `id` (Int), `name`, `slug`, `organizationId`.
+- `TaggedItemEntity` - Panache entity mapped to `revet_tagged_items` table. Uses `@ManyToOne` to TagEntity and stores `resourceUrn` as a string column.
 
 ### Repositories
 
@@ -167,12 +230,33 @@ interface ProjectRepository {
 }
 ```
 
-Both repositories have `@ApplicationScoped` Panache implementations with `@Transactional` write operations and soft-delete support.
+```kotlin
+interface TagRepository {
+    fun findAll(): List<Tag>
+    fun findById(id: Int): Tag?
+    fun findByName(name: String, organizationId: Long): Tag?
+    fun findBySlug(slug: String, organizationId: Long): Tag?
+    fun findAllByOrganizationId(organizationId: Long): List<Tag>
+    fun save(tag: Tag): Tag
+    fun delete(id: Int): Boolean
+}
+
+interface TaggedItemRepository {
+    fun addTagToResource(tagId: Int, resourceUrn: String)
+    fun removeTagFromResource(tagId: Int, resourceUrn: String): Boolean
+    fun findTagsByResource(resourceUrn: String): List<Tag>
+    fun deleteByTagId(tagId: Int)
+}
+```
+
+All repositories have `@ApplicationScoped` Panache implementations with `@Transactional` write operations. Organization and Project support soft-delete. Tag uses hard delete. TaggedItem operations are idempotent.
 
 ### Mappers
 
 - `OrganizationMapper` - Converts between `OrganizationEntity` and `Organization` domain model. Handles `ContactInfo` composition.
 - `ProjectMapper` - Converts between `ProjectEntity` and `Project` domain model. Handles `Timestamps` composition.
+- `TagMapper` - Converts between `TagEntity` and `Tag` domain model.
+- `TaggedItemMapper` - Converts `TaggedItemEntity` to `TaggedItem` domain model.
 
 ## Web Layer (web module)
 
@@ -189,10 +273,16 @@ Both repositories have `@ApplicationScoped` Panache implementations with `@Trans
 - `AddClientRequest` / `RemoveClientRequest`
 - `AddTagRequest` / `RemoveTagRequest`
 
+**Tag:**
+- `TagDTO` - Response DTO with id, name, slug, organizationId
+- `CreateTagRequest` - Creation request (name required, slug optional)
+- `UpdateTagRequest` - Partial update request (name and slug optional)
+
 ### Mappers
 
 - `OrganizationDTOMapper` - Maps `Organization` domain to/from DTOs. Includes `toContactInfo()` helpers for request conversion.
 - `ProjectDTOMapper` - Maps `Project` domain to `ProjectDTO`.
+- `TagDTOMapper` - Maps `Tag` domain to `TagDTO`.
 
 ## Characteristics
 
